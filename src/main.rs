@@ -1,18 +1,22 @@
 use std::net::{TcpListener, TcpStream};
 use std::io::{BufReader, prelude::*};
 use std::fs;
+use server_prac::ThreadPool;
 
 
 fn main() {
     // set host connection
     let listener =
         TcpListener::bind("127.0.0.1:7878").unwrap();
+    let pool = ThreadPool::new(5);
 
     //parse through each request made on the socket
     for stream in listener.incoming(){
         let stream = stream.unwrap();
 
-        handle_connection(stream);
+        pool.execute(||{
+            handle_connection(stream);
+        });
     }
 }
 
