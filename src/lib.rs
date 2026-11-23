@@ -1,8 +1,8 @@
-use std::{sync::mpsc, thread};
+use std::{sync::{Arc, Mutex, mpsc}, thread};
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: mpsc::Sender<Job>,
+    sender: Option<mpsc::Sender<Job>>,
 }
 
 struct Worker {
@@ -10,14 +10,38 @@ struct Worker {
     thread: thread::JoinHandle<()>,
 }
 
-struct Job;
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+impl Drop for ThreadPool {
+    fn drop(&mut self){
+        drop(self.sender.take());
+
+        for worker in self.workers.drain(..){
+            println!("Shutting down worker {}", worker.id);
+
+            worker.thread.join().unwrap();
+        }
+    }
+}
 
 impl Worker {
 
-    pub fn new(id: usize, reciever: mpsc::Receiver<Job>) -> Self {
-        let thread = thread::spawn(|| {
-            reciever;
+    pub fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
+        let thread = thread::spawn(move || {
+            loop {
+                let message = receiver.lock().unwrap().recv();
+                match message{
+                    Ok(job) => {
+                        println!("Worker {id} aquired a job, now executing!");
+                    }
+                    Err(_) => {
+                        println!("Worker {id} has disconnected from job, shutting down!")
+                        break;
+                    }
+                }
+            }
         });
+
 
         Worker { id, thread }
     }
@@ -35,14 +59,16 @@ impl ThreadPool {
     pub fn new(size: usize) -> Self {
         assert!(size > 0);
 
-        let (sender, reciever) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
 
         let mut workers = Vec::with_capacity(size);
 
         for id in 0..size {
-            workers.push(Worker::new(id, reciever))
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
-        Self { workers, sender }
+        Self { workers, sender: Some((sender)) }
     }
 
 
@@ -50,5 +76,8 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
+        let job = Box::new(f);
+
+        self.sender.as_ref().unwrap().send(job).unwrap();
     }
 }
